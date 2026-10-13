@@ -486,3 +486,22 @@ RunningHub/ComfyUI 不加入上述普通模型筛选：系统工作流公开列�
 | `admin_adjust` | 后台手动调整 |
 | `ai_consume` | 调用后端模型接口消费 |
 | `ai_refund` | 后端模型接口调用失败返还 |
+
+### platform_links
+
+New API 应用板块的账号绑定表。一个平台用户在本应用下对应一条记录，`api_key` 是该用户在本应用下的专用 `sk-` 密钥，只在服务端使用。
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `user_id` | string | 主键，本应用用户 ID |
+| `platform_user` | int | 平台 `user_id`，建索引用于复用同一条记录 |
+| `username` | string | 平台用户名，仅展示 |
+| `language` | string | 面板语言偏好 |
+| `api_key` | text | 平台签发的 `sk-` 密钥；模型层标了 `json:"-"`，永不返回前端 |
+| `api_base_url` | string | 平台 relay 根地址，不含 `/v1` |
+| `authorize_url` | string | 平台托管授权页地址，exchange 回来后落库 |
+| `unlimited_quota` | bool | 该密钥是否跳过令牌额度检查 |
+| `quota` / `used_quota` | int64 | 进入应用时的额度快照，按用户操作刷新，不轮询 |
+| `created_at` / `updated_at` | string | 时间 |
+
+`user_id` 由平台返回的 `user_id` 关联，应用不另建账号体系。用户在面板「断开连接」后，下游 relay 返回 401，应用据此删除该记录（401 是契约里唯一的撤销信号）。

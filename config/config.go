@@ -22,7 +22,11 @@ type Config struct {
 	LinuxDoAuthorizeURL string `env:"LINUX_DO_AUTHORIZE_URL" envDefault:"https://connect.linux.do/oauth2/authorize"`
 	LinuxDoTokenURL     string `env:"LINUX_DO_TOKEN_URL" envDefault:"https://connect.linux.do/oauth2/token"`
 	LinuxDoUserInfoURL  string `env:"LINUX_DO_USERINFO_URL" envDefault:"https://connect.linux.do/api/user"`
-	AILogDir            string `env:"AI_LOG_DIR" envDefault:"data/logs/ai-calls"`
+	AILogDir             string `env:"AI_LOG_DIR" envDefault:"data/logs/ai-calls"`
+	PlatformBaseURL      string `env:"APP_PLATFORM_BASE" envDefault:"https://ai.lesec.top"`
+	PlatformAppKey       string `env:"APP_KEY" envDefault:"canvas"`
+	PlatformAuthorizeURL string `env:"APP_AUTHORIZE_URL" envDefault:""`
+	PlatformTimeout      int    `env:"APP_PLATFORM_TIMEOUT" envDefault:"20"`
 }
 
 var Cfg Config

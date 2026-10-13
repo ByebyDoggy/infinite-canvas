@@ -20,11 +20,17 @@ import (
 
 const userModelChannelHeader = "X-User-Model-Channel-ID"
 
+// selectAIRequestChannel 依次按「用户自带渠道 → 平台会话渠道 → 系统渠道」解析。
+// 用户自带渠道（X-User-Model-Channel-ID）优先级最高，保持原有本地直连语义不变。
+// 平台会话渠道把平台签名不发的那张 sk- 密钥留在服务端，前端拿不到任何密钥。
 func selectAIRequestChannel(user model.AuthUser, modelName string, channelID string, userChannelID string, publicOnly bool) (model.ModelChannel, string, error) {
 	userChannelID = strings.TrimSpace(userChannelID)
 	if userChannelID != "" {
 		channel, err := service.SelectUserLocalModelChannelForModel(user.ID, modelName, userChannelID)
 		return channel, userChannelID, err
+	}
+	if link, ok := service.PlatformSessionForUser(user.ID); ok {
+		return service.PlatformRelayChannel(link), "", nil
 	}
 	if !service.UserCanUseRemoteModelChannel(user) {
 		return model.ModelChannel{}, "", fmt.Errorf("当前账号未开放云端渠道")
@@ -252,6 +258,11 @@ func copyAIResponse(w http.ResponseWriter, request *http.Request, channel model.
 			onFailure()
 		}
 		saveAIProxyLog(logContext, response.StatusCode, string(payload), strings.TrimSpace(string(payload)))
+		if handled := service.HandlePlatformRelayFailure(logContext.UserID, response.StatusCode); handled {
+			// 401 是契约里唯一的「授权已撤销」信号：会话已失效，不重试。
+			FailWithStatus(w, http.StatusUnauthorized, service.PlatformRelayFailureMessage(response.StatusCode))
+			return
+		}
 		message := readUpstreamAIErrorMessage(payload, response.StatusCode)
 		if service.IsTokenDanceChannel(channel) {
 			message = firstNonEmpty(service.TokenDanceRecoveryMessage(response.Header.Get("TokenDance-Recovery-Action")), message)

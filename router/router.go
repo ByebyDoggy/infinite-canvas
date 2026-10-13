@@ -21,6 +21,11 @@ func New() *gin.Engine {
 	api.GET("/auth/linux-do/authorize", gin.WrapF(handler.LinuxDoAuthorize))
 	api.GET("/auth/linux-do/callback", gin.WrapF(handler.LinuxDoCallback))
 	api.GET("/auth/me", middleware.OptionalAuth, gin.WrapF(handler.CurrentUser))
+	api.GET("/session/config", gin.WrapF(handler.PlatformSessionConfig))
+	api.POST("/session/exchange", gin.WrapF(handler.PlatformSession))
+	api.GET("/session", middleware.UserAuth, gin.WrapF(handler.PlatformSessionStatus))
+	api.POST("/session/quota", middleware.UserAuth, gin.WrapF(handler.PlatformSessionQuota))
+	api.DELETE("/session/platform", middleware.UserAuth, gin.WrapF(handler.PlatformSessionDisconnect))
 	api.GET("/settings", gin.WrapF(handler.Settings))
 	api.GET("/storage/config", gin.WrapF(handler.StorageConfig))
 	api.GET("/files/:id", func(c *gin.Context) {

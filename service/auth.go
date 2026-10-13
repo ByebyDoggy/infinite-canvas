@@ -432,18 +432,34 @@ func newSession(user model.User) (model.AuthSession, error) {
 }
 
 func newToken(user model.User) (string, error) {
+	return signToken(user.ID, user.Username, user.Role)
+}
+
+// newTokenForUserID 按用户 ID 重新签发 JWT，供平台登录流程复用。
+func newTokenForUserID(userID string) (string, error) {
+	user, ok, err := repository.GetUserByID(userID)
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		return "", safeMessageError{message: "用户不存在"}
+	}
+	return signToken(user.ID, user.Username, user.Role)
+}
+
+func signToken(userID string, username string, role model.UserRole) (string, error) {
 	expireHours := config.Cfg.JWTExpireHours
 	if expireHours <= 0 {
 		expireHours = 168
 	}
 	claims := TokenClaims{
-		UserID:   user.ID,
-		Username: user.Username,
-		Role:     user.Role,
+		UserID:   userID,
+		Username: username,
+		Role:     role,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Duration(expireHours) * time.Hour)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
-			Subject:   user.ID,
+			Subject:   userID,
 		},
 	}
 	return jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(config.Cfg.JWTSecret))

@@ -84,6 +84,7 @@ func DB() (*gorm.DB, error) {
 			&model.CanvasProject{},
 			&model.ComfyBridge{},
 			&model.ComfyBridgeRequest{},
+			&model.PlatformLink{},
 		)
 	})
 	return db, dbErr
