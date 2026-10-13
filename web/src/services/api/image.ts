@@ -3,6 +3,7 @@ import { executeParameterTranslation, findParameterTranslation, normalizeTransla
 
 import { isMiniMaxChannel, miniMaxModels } from "@/lib/minimax-video";
 import { dataUrlToFile } from "@/lib/image-utils";
+import { ensurePlatformSession } from "@/hooks/use-platform-login";
 import { isKIESeedreamLayerDecompositionModel } from "@/lib/kie-models";
 import { isMimoChannel, mimoModels } from "@/lib/mimo-tts";
 import { modelChannelAttributionHeaders } from "@/lib/model-channel";
@@ -1013,6 +1014,7 @@ async function syncCanvasImageTask(task: CanvasImageTask, resultId = task.starte
 }
 
 export async function requestGeneration(config: AiConfig & { seedIndex?: number; seedCount?: number }, prompt: string) {
+    if (!ensurePlatformSession("generate")) throw new Error("请先登录后再生成");
     try {
         const images = await requestImages(config, prompt, []);
         refreshRemoteUser(config);
@@ -1024,6 +1026,7 @@ export async function requestGeneration(config: AiConfig & { seedIndex?: number;
 }
 
 export async function requestEdit(config: AiConfig & { seedIndex?: number; seedCount?: number }, prompt: string, references: ReferenceImage[]) {
+    if (!ensurePlatformSession("generate")) throw new Error("请先登录后再生成");
     try {
         const images = await requestImages(config, prompt, references);
         refreshRemoteUser(config);
@@ -1035,6 +1038,7 @@ export async function requestEdit(config: AiConfig & { seedIndex?: number; seedC
 }
 
 export async function createCanvasImageTask(config: AiConfig & { seedIndex?: number; seedCount?: number }, prompt: string, references: ReferenceImage[], options: CanvasImageTaskOptions = {}): Promise<CanvasImageTask> {
+	if (!ensurePlatformSession("generate")) throw new Error("请先登录后再生成");
 	const translation = await findParameterTranslation(config);
     if (!usesAccountProxy(config)) {
         const images = await requestImages({ ...config, count: "1" }, prompt, references, options.signal);
