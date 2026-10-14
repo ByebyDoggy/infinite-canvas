@@ -52,3 +52,15 @@ test("codex connect view does not advertise the upstream plugin", () => {
     assert.ok(!/plugin marketplace add/.test(source), "不应再给出上游插件安装命令");
     assert.ok(!/@tigerowo\//.test(source), "不应再引用上游 npm 包");
 });
+
+// 顶栏每一项都必须有对应的页面目录，否则用户点进去就是 404。
+// 「音乐创作台」曾经就这样挂了一个没有实现的入口。
+test("every navigation tool has a matching page", () => {
+    const source = read("./constant/navigation-tools.ts");
+    const slugs = [...source.matchAll(/slug:\s*"([a-z-]+)"/g)].map((match) => match[1]);
+    assert.ok(slugs.length > 0, "应当解析出导航项");
+    for (const slug of slugs) {
+        const page = read(`./app/(user)/${slug}/page.tsx`);
+        assert.ok(page.length > 0, `${slug} 缺少对应的页面`);
+    }
+});
