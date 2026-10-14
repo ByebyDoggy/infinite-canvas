@@ -26,7 +26,7 @@ func New() *gin.Engine {
 	api.GET("/session", middleware.UserAuth, gin.WrapF(handler.PlatformSessionStatus))
 	api.POST("/session/quota", middleware.UserAuth, gin.WrapF(handler.PlatformSessionQuota))
 	api.DELETE("/session/platform", middleware.UserAuth, gin.WrapF(handler.PlatformSessionDisconnect))
-	api.GET("/settings", gin.WrapF(handler.Settings))
+	api.GET("/settings", middleware.OptionalAuth, gin.WrapF(handler.Settings))
 	api.GET("/storage/config", gin.WrapF(handler.StorageConfig))
 	api.GET("/files/:id", func(c *gin.Context) {
 		handler.FileInfo(c.Writer, c.Request, c.Param("id"))

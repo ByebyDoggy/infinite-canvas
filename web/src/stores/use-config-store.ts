@@ -403,7 +403,10 @@ export const useConfigStore = create<ConfigStore>()(
                 if (get().isPublicSettingsLoading) return;
                 set({ isPublicSettingsLoading: true });
                 try {
-                    set({ publicSettings: await apiGet<AdminPublicSettings>("/api/settings") });
+                    // 平台用户的模型列表由服务端按身份注入，所以必须带上令牌；
+                    // 没有令牌时后端返回本应用后台配置的系统渠道。
+                    const token = useUserStore.getState().token;
+                    set({ publicSettings: await apiGet<AdminPublicSettings>("/api/settings", undefined, token || undefined) });
                 } finally {
                     set({ isPublicSettingsLoading: false });
                 }

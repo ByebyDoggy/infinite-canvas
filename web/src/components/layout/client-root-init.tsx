@@ -43,9 +43,15 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
         return () => window.removeEventListener(STORAGE_SYNC_FAILED_EVENT, onSyncFailed);
     }, [message]);
 
+    // 平台用户的模型列表由服务端按身份注入，身份一变换就得重取一次；
+    // 否则用户登录后仍会用着游客那份配置，模型列表是空的。
+    const settingsIdentityRef = useRef("");
     useEffect(() => {
+        const identity = token || "guest";
+        if (settingsIdentityRef.current === identity) return;
+        settingsIdentityRef.current = identity;
         void loadPublicSettings();
-    }, [loadPublicSettings]);
+    }, [loadPublicSettings, token]);
 
     useEffect(() => {
         if (!isLoginPage) void hydrateUser();

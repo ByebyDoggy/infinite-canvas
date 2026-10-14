@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tigerowo/infinite-canvas/config"
@@ -486,5 +487,120 @@ func ExchangePlatformSession(code string) (model.AuthSession, error) {
 		return model.AuthSession{}, err
 	}
 	return model.AuthSession{Token: token, User: user}, nil
+}
+
+// PlatformModelChannelID 是平台模型列表在公开设置里的渠道标识。
+// 前端把它当成一个系统渠道的 id，只用于模型选择与能力分类；
+// 请求路由仍由服务端按平台会话解析，这个 id 不参与寻址。
+const PlatformModelChannelID = "platform"
+
+// platformModelCacheTTL 控制模型列表的缓存时长。页面每次加载都会取一次
+// 公开设置，所以这里必须缓存，否则等于每次开页面都打一次平台。
+const platformModelCacheTTL = 5 * time.Minute
+
+type platformModelCacheEntry struct {
+	models    []string
+	expiresAt time.Time
+}
+
+var (
+	platformModelCacheMu sync.Mutex
+	platformModelCache   = map[string]platformModelCacheEntry{}
+)
+
+// PlatformModels 读取平台为该用户开放的模型列表。
+// 取不到时返回空列表而不是错误：模型列表缺失不该让整个页面打不开。
+func PlatformModels(link model.PlatformLink) []string {
+	cacheKey := link.APIBaseURL + "|" + link.APIKey
+	platformModelCacheMu.Lock()
+	if entry, ok := platformModelCache[cacheKey]; ok && time.Now().Before(entry.expiresAt) {
+		platformModelCacheMu.Unlock()
+		return entry.models
+	}
+	platformModelCacheMu.Unlock()
+
+	models := fetchPlatformModels(link)
+	platformModelCacheMu.Lock()
+	platformModelCache[cacheKey] = platformModelCacheEntry{models: models, expiresAt: time.Now().Add(platformModelCacheTTL)}
+	platformModelCacheMu.Unlock()
+	return models
+}
+
+func fetchPlatformModels(link model.PlatformLink) []string {
+	base := strings.TrimRight(strings.TrimSpace(link.APIBaseURL), "/")
+	if base == "" || strings.TrimSpace(link.APIKey) == "" {
+		return nil
+	}
+	request, err := http.NewRequest(http.MethodGet, base+"/v1/models", nil)
+	if err != nil {
+		return nil
+	}
+	request.Header.Set("Authorization", "Bearer "+link.APIKey)
+	response, err := defaultPlatformClient.httpClient.Do(request)
+	if err != nil {
+		return nil
+	}
+	defer response.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return nil
+	}
+	var payload struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil
+	}
+	models := make([]string, 0, len(payload.Data))
+	seen := make(map[string]struct{}, len(payload.Data))
+	for _, item := range payload.Data {
+		name := strings.TrimSpace(item.ID)
+		if name == "" {
+			continue
+		}
+		if _, exists := seen[name]; exists {
+			continue
+		}
+		seen[name] = struct{}{}
+		models = append(models, name)
+	}
+	return models
+}
+
+// InvalidatePlatformModels 在会话失效或额度刷新后丢弃缓存的模型列表。
+func InvalidatePlatformModels(link model.PlatformLink) {
+	platformModelCacheMu.Lock()
+	delete(platformModelCache, link.APIBaseURL+"|"+link.APIKey)
+	platformModelCacheMu.Unlock()
+}
+
+// PlatformModelChannelSetting 用平台开放的模型列表替换公开设置里的渠道配置。
+//
+// 平台用户的可选模型只可能来自平台，所以这里直接接管整个 ModelChannel：
+// 渠道列表收敛成一条平台渠道，AllowUserRemoteChannel 打开让前端走账号代理，
+// AllowCustomChannel 关闭——否则默认的本地直连模式会看到一个空模型列表。
+func PlatformModelChannelSetting(base model.PublicModelChannelSetting, link model.PlatformLink) model.PublicModelChannelSetting {
+	models := PlatformModels(link)
+	allowCustomChannel := false
+	allowUserRemoteChannel := true
+	base.AvailableModels = models
+	base.AvailableWorkflows = []string{}
+	base.Channels = []model.PublicModelChannelInfo{{
+		ID:       PlatformModelChannelID,
+		Protocol: ModelChannelProtocolOpenAI,
+		Name:     "New API 平台",
+		Models:   models,
+		Weight:   1,
+		Enabled:  true,
+	}}
+	base.DefaultModel = ""
+	base.DefaultImageModel = ""
+	base.DefaultVideoModel = ""
+	base.DefaultTextModel = ""
+	base.AllowCustomChannel = &allowCustomChannel
+	base.AllowUserRemoteChannel = &allowUserRemoteChannel
+	return base
 }
 

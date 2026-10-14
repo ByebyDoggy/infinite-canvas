@@ -244,3 +244,106 @@ func TestPlatformRelayChannelUsesServerSideKey(t *testing.T) {
 		t.Fatalf("channel protocol = %q", channel.Protocol)
 	}
 }
+
+func TestPlatformModelsReadsRelayModelList(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer sk-server-side" {
+			t.Errorf("authorization = %q", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"success":true,"object":"list","data":[{"id":"gpt-image-2"},{"id":"gpt-image-2.5-flare"},{"id":"gpt-image-2"},{"id":""}]}`))
+	}))
+	defer server.Close()
+
+	link := platformLinkFixture()
+	link.APIBaseURL = server.URL
+	models := PlatformModels(link)
+	if len(models) != 2 || models[0] != "gpt-image-2" || models[1] != "gpt-image-2.5-flare" {
+		t.Fatalf("models = %#v, want the deduplicated platform list", models)
+	}
+}
+
+// 模型列表取不到时必须是空列表而不是错误：缺列表不该让整个页面打不开。
+func TestPlatformModelsDegradesToEmptyList(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	link := platformLinkFixture()
+	link.APIBaseURL = server.URL
+	if models := PlatformModels(link); len(models) != 0 {
+		t.Fatalf("upstream error must degrade to empty, got %#v", models)
+	}
+
+	link.APIBaseURL = "http://127.0.0.1:1"
+	if models := PlatformModels(link); len(models) != 0 {
+		t.Fatalf("unreachable platform must degrade to empty, got %#v", models)
+	}
+}
+
+func TestPlatformModelChannelSettingTakesOverPublicChannel(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"gpt-image-2.5-sunburst"}]}`))
+	}))
+	defer server.Close()
+
+	link := platformLinkFixture()
+	link.APIBaseURL = server.URL
+
+	// 基线故意留一份「管理员配了别的渠道」的配置，确认平台身份会整体接管。
+	allowCustom := true
+	adminConfigured := model.PublicModelChannelSetting{
+		AvailableModels:    []string{"some-other-model"},
+		DefaultImageModel:  "some-other-model",
+		AllowCustomChannel: &allowCustom,
+	}
+
+	got := PlatformModelChannelSetting(adminConfigured, link)
+
+	assertStringSlice(t, got.AvailableModels, []string{"gpt-image-2.5-sunburst"})
+	assertStringSlice(t, got.AvailableWorkflows, []string{})
+	if len(got.Channels) != 1 {
+		t.Fatalf("channels = %#v, want exactly the platform channel", got.Channels)
+	}
+	channel := got.Channels[0]
+	if channel.ID != PlatformModelChannelID || channel.Protocol != "openai" {
+		t.Fatalf("platform channel = %#v", channel)
+	}
+	assertStringSlice(t, channel.Models, []string{"gpt-image-2.5-sunburst"})
+	// 默认模型留空，交给前端按能力挑：平台不保证哪个模型一定是生图模型。
+	for name, value := range map[string]string{
+		"DefaultModel":      got.DefaultModel,
+		"DefaultImageModel": got.DefaultImageModel,
+		"DefaultVideoModel": got.DefaultVideoModel,
+		"DefaultTextModel":  got.DefaultTextModel,
+	} {
+		if value != "" {
+			t.Fatalf("%s = %q, want empty so the frontend picks by capability", name, value)
+		}
+	}
+	// 关掉本地直连并打开云端渠道：否则前端默认落在 local 模式，看到的还是空列表。
+	if got.AllowCustomChannel == nil || *got.AllowCustomChannel {
+		t.Fatal("AllowCustomChannel must be false for platform users")
+	}
+	if got.AllowUserRemoteChannel == nil || !*got.AllowUserRemoteChannel {
+		t.Fatal("AllowUserRemoteChannel must be true for platform users")
+	}
+}
+
+
+func assertStringSlice(t *testing.T, got, want []string) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("got %#v, want %#v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("got %#v, want %#v", got, want)
+		}
+	}
+}

@@ -36,6 +36,11 @@ func UserCanUseRemoteModelChannel(user model.AuthUser) bool {
 	if user.Role == model.UserRoleAdmin {
 		return true
 	}
+	// 平台用户的模型只可能来自平台，所以云端渠道对他们始终开放；
+	// 公开设置里会把 AllowUserRemoteChannel 一并置真，两者保持一致。
+	if _, linked := PlatformSessionForUser(user.ID); linked {
+		return true
+	}
 	settings, err := PublicSettings()
 	return err == nil && settings.ModelChannel.AllowUserRemoteChannel != nil && *settings.ModelChannel.AllowUserRemoteChannel
 }

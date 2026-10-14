@@ -14,11 +14,18 @@ type adminChannelActionRequest struct {
 	Model   string             `json:"model"`
 }
 
+// Settings 返回公开设置。带上用户身份是因为平台用户的可选模型来自平台，
+// 而不是本应用后台配置的渠道；没有身份时按原来的系统渠道返回。
 func Settings(w http.ResponseWriter, r *http.Request) {
 	settings, err := service.PublicSettings()
 	if err != nil {
 		FailError(w, err)
 		return
+	}
+	if user, ok := service.UserFromContext(r.Context()); ok {
+		if link, linked := service.PlatformSessionForUser(user.ID); linked {
+			settings.ModelChannel = service.PlatformModelChannelSetting(settings.ModelChannel, link)
+		}
 	}
 	OK(w, settings)
 }
