@@ -20,17 +20,10 @@ export type AuthSession = {
     user: AuthUser;
 };
 
-export type AuthPayload = {
-    username: string;
-    password: string;
-};
-
-export async function login(payload: AuthPayload) {
-    return apiPost<AuthSession>("/api/auth/login", payload);
-}
-
-export async function register(payload: AuthPayload) {
-    return apiPost<AuthSession>("/api/auth/register", payload);
+// 注册与密码登录只在应用后台（/admin）保留；普通用户的身份一律来自
+// New API 平台的一次性启动码，见 services/api/platform-session.ts。
+export async function adminLogin(payload: { username: string; password: string }) {
+    return apiPost<AuthSession>("/api/admin/login", payload);
 }
 
 export async function fetchCurrentUser(token?: string) {

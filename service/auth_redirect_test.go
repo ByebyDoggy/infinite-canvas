@@ -1,10 +1,11 @@
 package service
 
 import (
-	"encoding/base64"
 	"testing"
 )
 
+// safeRedirectPath 仍在使用：RequestOrigin 拼出的回跳地址、
+// 以及后台登录成功后回 /admin 的路径都要过这一关。
 func TestSafeRedirectPath(t *testing.T) {
 	cases := map[string]string{
 		"/":                    "/",
@@ -24,18 +25,5 @@ func TestSafeRedirectPath(t *testing.T) {
 		if got := safeRedirectPath(in); got != want {
 			t.Errorf("safeRedirectPath(%q) = %q, want %q", in, got, want)
 		}
-	}
-}
-
-func TestDecodeStateRejectsOpenRedirect(t *testing.T) {
-	for _, in := range []string{"//evil.com", "/\\evil.com", "https://evil.com"} {
-		state := base64.RawURLEncoding.EncodeToString([]byte(in))
-		if got := decodeState(state); got != "/" {
-			t.Errorf("decodeState(state(%q)) = %q, want \"/\"", in, got)
-		}
-	}
-	state := base64.RawURLEncoding.EncodeToString([]byte("/canvas/1"))
-	if got := decodeState(state); got != "/canvas/1" {
-		t.Errorf("decodeState(state(/canvas/1)) = %q, want /canvas/1", got)
 	}
 }

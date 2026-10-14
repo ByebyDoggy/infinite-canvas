@@ -83,6 +83,20 @@ export function requirePlatformLogin(intent: PlatformIntent, authorizeUrl: strin
     return false;
 }
 
+/**
+ * 拼平台托管授权页地址。授权页地址只来自后端（`/api/session/config` 或 exchange
+ * 返回的 `authorize_url`），前端不硬编码平台域名——换一个部署就废。
+ */
+export function buildPlatformAuthorizeURL(
+    authorizeUrl: string,
+    appKey: string,
+    returnPath: string
+): string {
+    const state = encodePlatformState({ returnPath: safeReturnPath(returnPath) || "/" });
+    return `${authorizeUrl}?app=${encodeURIComponent(appKey)}&state=${encodeURIComponent(state)}`;
+}
+
+
 /** 回调地址里的 code 是 5 分钟有效的凭据，兑换后立刻从地址栏抹掉。 */
 export function stripCallbackParams() {
     const params = new URLSearchParams(window.location.search);
