@@ -71,7 +71,9 @@ export function CanvasImageSettingsPopover({ config, onConfigChange, onOpenChang
         <>
             <span ref={buttonRef} className="inline-flex min-w-0">
                 <Button size="small" type="text" className={buttonClassName || "!h-8 !max-w-[180px] !justify-start !rounded-full !px-2.5"} style={{ background: theme.node.fill, color: theme.node.text }} icon={buttonIcon || <Settings2 className="size-3.5" />} onClick={() => updateOpen(!open)}>
-                    <span className="truncate">
+                    {/* 窄容器里只留图标：文字去掉后按钮自动收成 32px 宽的圆点，
+                        控制栏在手机上不再拥挤。断点与 composer 的 @container 对齐。 */}
+                    <span className="hidden truncate @[440px]:inline">
                         {effectiveShowSize ? (
                             <>
                                 {imageQualityLabel(quality)} · {imageSizeLabel(activeSize)}

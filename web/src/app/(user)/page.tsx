@@ -9,7 +9,7 @@ import { useRouter } from "next/navigation";
 import { fetchPrompts, type Prompt } from "@/services/api/prompts";
 import { cn } from "@/lib/utils";
 import { uploadAssetMediaFile } from "@/services/file-storage";
-import { uploadImage } from "@/services/image-storage";
+import { uploadImage, getProxyUrl } from "@/services/image-storage";
 import { useEffectiveConfig } from "@/stores/use-config-store";
 import { AssetPickerModal } from "./canvas/components/asset-picker-modal";
 import { CanvasAssistantComposer } from "./canvas/components/canvas-assistant-composer";
@@ -126,8 +126,10 @@ export default function IndexPage() {
 
     return (
         <main className="relative h-full overflow-x-hidden overflow-y-auto bg-background bg-[radial-gradient(#e5e7eb_1px,transparent_1px)] [background-size:16px_16px] text-stone-950 dark:bg-[radial-gradient(rgba(245,245,244,.18)_1px,transparent_1px)] dark:text-stone-100">
-            <section className="relative mx-auto min-h-[calc(100vh-4rem)] max-w-7xl px-6">
-                <section className="relative flex min-h-[620px] flex-col items-center justify-center py-10 sm:py-14">
+            <section className="relative mx-auto min-h-[calc(100vh-4rem)] max-w-7xl px-4 sm:px-6">
+                {/* 手机上第一屏要同时装下输入框和它下面的内容，所以不强制 620px 高；
+                    窄屏还额外压掉上下留白，否则首屏只剩输入框。 */}
+                <section className="relative flex min-h-[440px] flex-col items-center justify-center py-6 sm:min-h-[620px] sm:py-14">
                     <h1 className="sr-only">无限画布</h1>
                     <div className="w-full max-w-[820px]">
                         <CanvasAssistantComposer
@@ -150,20 +152,20 @@ export default function IndexPage() {
                     <input ref={uploadInputRef} hidden type="file" accept="image/*,video/*,audio/*" onChange={onUploadInputChange} />
                 </section>
 
-                <section className="relative mx-auto mb-20 max-w-6xl border-t border-stone-200 pt-12 dark:border-stone-800">
-                    <div className="mb-8 grid gap-4 md:grid-cols-[1fr_auto_1fr] md:items-start">
+                <section className="relative mx-auto mb-12 max-w-6xl border-t border-stone-200 pt-8 dark:border-stone-800 sm:mb-20 sm:pt-12">
+                    <div className="mb-6 grid gap-3 sm:mb-8 sm:gap-4 md:grid-cols-[1fr_auto_1fr] md:items-start">
                         <div />
                         <div className="max-w-2xl text-center">
                             <div className="flex flex-wrap items-center justify-center gap-3">
-                                <h2 className="text-3xl font-semibold text-stone-950 dark:text-stone-100">沉淀每一次好结果</h2>
+                                <h2 className="text-2xl font-semibold text-stone-950 dark:text-stone-100 sm:text-3xl">沉淀每一次好结果</h2>
                             </div>
-                            <p className="mt-3 text-base leading-7 text-stone-500 dark:text-stone-400">收藏稳定出图的提示词、参考风格和结果图片，让下一次创作从已有经验开始。</p>
+                            <p className="mt-2 text-sm leading-6 text-stone-500 dark:text-stone-400 sm:mt-3 sm:text-base sm:leading-7">收藏稳定出图的提示词、参考风格和结果图片，让下一次创作从已有经验开始。</p>
                         </div>
                         <Button type="link" href="/prompts" className="justify-self-center md:justify-self-end" icon={<ArrowRight className="size-4" />} iconPlacement="end">
                             提示词库
                         </Button>
                     </div>
-                    <div className="grid auto-rows-[210px] gap-4 md:grid-cols-4">
+                    <div className="grid auto-rows-[150px] gap-3 sm:auto-rows-[210px] sm:gap-4 md:grid-cols-4">
                         {promptShowcase.map((item, index) => (
                             <button
                                 key={item.id}
@@ -178,8 +180,8 @@ export default function IndexPage() {
                                     index === 3 && "md:col-span-2",
                                 )}
                             >
-                                <img src={item.coverUrl} alt={item.title} className="h-full w-full object-cover transition duration-500 group-hover:scale-[1.03]" />
-                                <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 via-black/35 to-transparent p-4 text-white">
+                                <img src={getProxyUrl(item.coverUrl)} alt={item.title} loading="lazy" className="h-full w-full object-cover transition duration-500 group-hover:scale-[1.03]" />
+                                <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 via-black/35 to-transparent p-3 text-white sm:p-4">
                                     <div className="mb-2 flex flex-wrap gap-1.5">
                                         {item.tags.slice(0, 2).map((tag) => (
                                             <Tag key={tag} variant="filled" className="m-0 bg-white/15 text-[11px] text-white backdrop-blur">
@@ -206,7 +208,7 @@ export default function IndexPage() {
             />
             <Image.PreviewGroup
                 items={promptShowcase.map((item) => ({
-                    src: item.coverUrl,
+                    src: getProxyUrl(item.coverUrl),
                     alt: item.title,
                 }))}
                 preview={{

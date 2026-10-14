@@ -88,7 +88,10 @@ export function CanvasAssistantComposer({
                     placeholder="描述创作目标，或让我继续操作画布"
                     placeholderClassName="!left-1 !top-0"
                 />
-                <div className="@container mt-2 flex items-center justify-between gap-2">
+                {/* 控制栏在窄容器里换成两行：上行放素材与设置，下行只剩「推理 + 发送」。
+                    默认（手机）走两行，容器够宽（≥520px）才并回一行。
+                    断点用容器查询而不是视口查询——画布右侧面板的宽度与窗口无关。 */}
+                <div className="@container mt-2 flex flex-wrap items-center gap-x-2 gap-y-1.5 @[520px]:justify-between">
                     <div className="flex min-w-0 flex-1 items-center gap-1">
                         <Dropdown
                             trigger={["click"]}
@@ -100,7 +103,7 @@ export function CanvasAssistantComposer({
                                 onClick: ({ key }) => (key === "upload" ? onOpenUpload() : onOpenAssets()),
                             }}
                         >
-                            <Button type="text" shape="circle" className="!h-8 !w-8 !min-w-8" style={{ color: theme.node.text }} icon={<Menu className="size-4" />} aria-label="添加素材" />
+                            <Button type="text" shape="circle" className="!h-8 !w-8 !min-w-8 shrink-0" style={{ color: theme.node.text }} icon={<Menu className="size-4" />} aria-label="添加素材" />
                         </Dropdown>
                         {onSkillSelect && onSkillRemove ? <CanvasAgentSkillPopover selectedSkills={selectedSkills} onSelect={onSkillSelect} onDeleteSelected={onSkillRemove} /> : null}
                         {codexControls}
@@ -109,7 +112,7 @@ export function CanvasAssistantComposer({
                             placement="topLeft"
                             showCount={false}
                             buttonIcon={<ImageIcon className="size-3.5" />}
-                            buttonClassName="!h-8 !max-w-[116px] !justify-start !rounded-full !px-2.5"
+                            buttonClassName="!h-8 !max-w-[116px] !shrink-0 !justify-start !rounded-full !px-2.5"
                             onConfigChange={(key, value) => {
                                 if (key === "quality") onAgentConfigChange({ imageQuality: value });
                                 else if (key === "size") onAgentConfigChange({ imageSize: value });
@@ -120,19 +123,19 @@ export function CanvasAssistantComposer({
                             placement="topLeft"
                             visualOnly
                             buttonIcon={<Video className="size-3.5" />}
-                            buttonClassName="!h-8 !max-w-[124px] !justify-start !rounded-full !px-2.5"
+                            buttonClassName="!h-8 !max-w-[124px] !shrink-0 !justify-start !rounded-full !px-2.5"
                             onConfigChange={(key, value) => {
                                 if (key === "vquality") onAgentConfigChange({ videoQuality: value });
                                 else if (key === "size") onAgentConfigChange({ videoSize: value });
                             }}
                         />
                     </div>
-                    <div className="flex shrink-0 items-center gap-1">
+                    <div className="flex shrink-0 items-center gap-1 @[520px]:ml-0 ml-auto">
                         {!codexControls ? (
                         <Button
                             type="text"
                             shape="circle"
-                            className="!h-8 !w-8 !min-w-8"
+                            className="!h-8 !w-8 !min-w-8 shrink-0"
                             style={{ color: theme.node.text, background: reasoningEnabled ? theme.toolbar.activeBg : undefined }}
                             icon={<Brain className="size-4" />}
                             title={reasoningEnabled ? "推理已开启" : "推理已关闭"}
@@ -144,7 +147,7 @@ export function CanvasAssistantComposer({
                         <Button
                             type="primary"
                             shape="circle"
-                            className="!size-10 !min-w-10"
+                            className="!size-10 !min-w-10 shrink-0"
                             disabled={!isRunning && !prompt.trim()}
                             onClick={() => (isRunning ? onStop?.() : void submit())}
                             aria-label={isRunning ? "停止" : "发送"}

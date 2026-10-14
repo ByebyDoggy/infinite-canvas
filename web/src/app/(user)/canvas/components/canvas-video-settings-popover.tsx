@@ -69,7 +69,8 @@ export function CanvasVideoSettingsPopover({ config, onConfigChange, frameOption
         <>
             <span ref={buttonRef} className="inline-flex min-w-0">
                 <Button size="small" type="text" className={buttonClassName || "!h-8 !max-w-[170px] !justify-start !rounded-full !px-2.5"} style={{ background: theme.node.fill, color: theme.node.text }} icon={buttonIcon || <Settings2 className="size-3.5" />} onClick={() => setOpen((current) => !current)}>
-                    <span className="truncate">
+                    {/* 与图片设置同理：窄容器只留图标。 */}
+                    <span className="hidden truncate @[440px]:inline">
                         {videoResolutionLabel(config.vquality)} · {videoSizeLabel(config.size)}
                         {visualOnly ? null : <> · {videoSecondsLabel(config.videoSeconds)}</>}
                     </span>
