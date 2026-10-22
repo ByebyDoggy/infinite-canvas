@@ -504,4 +504,22 @@ New API 应用板块的账号绑定表。一个平台用户在本应用下对应
 | `quota` / `used_quota` | int64 | 进入应用时的额度快照，按用户操作刷新，不轮询 |
 | `created_at` / `updated_at` | string | 时间 |
 
-`user_id` 由平台返回的 `user_id` 关联，应用不另建账号体系。用户在面板「断开连接」后，下游 relay 返回 401，应用据此删除该记录（401 是契约里唯一的撤销信号）。
+`user_id` 由平台返回的 `user_id` 关联，应用不另建账号体系。`api_key` 是主授权项的密钥，保留给「平台未升级到 v3」的单密钥部署。
+
+### platform_grants
+
+New API 应用板块的授权项表（契约 v3）。一条记录对应平台签发的一张专用 `sk-`，按「分组 + 模型集合」描述它能覆盖的模型面。
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `user_id` | string | 联合主键之一，本应用用户 ID |
+| `grant_key` | string | 联合主键之一，平台下发的授权项标识（`auto:<spec>` / `manual:<group>` / `legacy`） |
+| `label` | string | 展示名，可能为空 |
+| `group` | string | 平台分组，仅展示与排障 |
+| `models` | json | 平台声明的模型面；实际可用性以该密钥的 `/v1/models` 为准 |
+| `api_key` | text | 该授权项的 `sk-` 密钥；模型层标了 `json:"-"`，永不返回前端 |
+| `priority` | int | 越小越优先，同一模型命中多条时按它排序 |
+| `status` | string | `active` / `revoked`；单张密钥 401 后只降级这一条 |
+| `created_at` / `updated_at` | string | 时间 |
+
+每次 exchange 用平台返回值整体替换该用户的授权项，保证平台侧增删 grant 后本地不残留死密钥。模型列表由各授权项的 `/v1/models` 合并去重；请求按模型路由到对应密钥。只有全部授权项都失效，才等同于用户断开连接。

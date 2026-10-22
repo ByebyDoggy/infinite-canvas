@@ -33,6 +33,10 @@ type ModelChannel struct {
 
 	ModelCapabilities    map[string]string `json:"modelCapabilities,omitempty"`
 	ParameterTranslation string            `json:"parameterTranslation,omitempty"`
+
+	// PlatformGrantKey 只在平台渠道上出现：它标记这次请求用的是哪一条授权项。
+	// relay 返回 401 时按它降级单条 grant，而不是把整个平台会话作废。
+	PlatformGrantKey string `json:"platformGrantKey,omitempty"`
 }
 
 type WorkflowFieldMapping struct {

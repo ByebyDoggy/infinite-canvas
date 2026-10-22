@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -130,6 +131,25 @@ type platformExchangeData struct {
 	Quota          int64  `json:"quota"`
 	UsedQuota      int64  `json:"used_quota"`
 	UnlimitedQuota bool   `json:"unlimited_quota"`
+	GrantMode      string `json:"grant_mode"`
+	// Grants 是 v3 契约的权威授权项。平台没升到 v3 时为空，
+	// 此时退回 v1 的单密钥语义（用顶层的 api_key）。
+	Grants []platformExchangeGrant `json:"grants"`
+}
+
+// platformExchangeGrant 是 exchange 返回的一条授权项。
+// 一条对应一张 sk-，模型面以 models 为声明值，实际可用性以该密钥的
+// /v1/models 为准。
+type platformExchangeGrant struct {
+	ID             string   `json:"id"`
+	Label          string   `json:"label"`
+	Group          string   `json:"group"`
+	Models         []string `json:"models"`
+	Priority       int      `json:"priority"`
+	APIKey         string   `json:"api_key"`
+	UnlimitedQuota bool     `json:"unlimited_quota"`
+	RemainQuota    int64    `json:"remain_quota"`
+	UsedQuota      int64    `json:"used_quota"`
 }
 
 type platformEnvelope struct {
@@ -276,10 +296,74 @@ func LinkPlatformSession(data platformExchangeData) (model.AuthUser, error) {
 	if linked && link.CreatedAt != "" {
 		saved.CreatedAt = link.CreatedAt
 	}
+	// v3 的权威授权项是 grants：一条 grant 一张密钥。平台还没升到 v3 时
+	// 退回顶层 api_key，落成一条 legacy grant，行为与 v1 一致。
+	grants := platformGrantsFromExchange(user.ID, data)
+	if err := repository.ReplacePlatformGrants(user.ID, grants); err != nil {
+		return model.AuthUser{}, err
+	}
 	if _, err := repository.SavePlatformLink(saved); err != nil {
 		return model.AuthUser{}, err
 	}
 	return model.PublicUser(user), nil
+}
+
+// platformGrantsFromExchange 把 exchange 响应翻译成落库的授权项。
+// 主 grant 的密钥同时写回 PlatformLink.APIKey，供 v1 那条单密钥路径继续用。
+func platformGrantsFromExchange(userID string, data platformExchangeData) []model.PlatformGrant {
+	current := now()
+	grants := make([]model.PlatformGrant, 0, len(data.Grants))
+	for _, item := range data.Grants {
+		key := strings.TrimSpace(item.ID)
+		secret := strings.TrimSpace(item.APIKey)
+		if secret == "" {
+			continue
+		}
+		if key == "" {
+			key = "grant-" + fmt.Sprint(len(grants))
+		}
+		grants = append(grants, model.PlatformGrant{
+			UserID:    userID,
+			GrantKey:  key,
+			Label:     strings.TrimSpace(item.Label),
+			Group:     strings.TrimSpace(item.Group),
+			Models:    trimModelList(item.Models),
+			APIKey:    secret,
+			Priority:  item.Priority,
+			Status:    model.PlatformGrantStatusActive,
+			CreatedAt: current,
+			UpdatedAt: current,
+		})
+	}
+	if len(grants) == 0 && strings.TrimSpace(data.APIKey) != "" {
+		grants = append(grants, model.PlatformGrant{
+			UserID:    userID,
+			GrantKey:  model.PlatformGrantKeyLegacy,
+			APIKey:    strings.TrimSpace(data.APIKey),
+			Status:    model.PlatformGrantStatusActive,
+			CreatedAt: current,
+			UpdatedAt: current,
+		})
+	}
+	return grants
+}
+
+// trimModelList 去掉空白项与重复项，保留平台给的顺序。
+func trimModelList(models []string) []string {
+	result := make([]string, 0, len(models))
+	seen := make(map[string]struct{}, len(models))
+	for _, item := range models {
+		name := strings.TrimSpace(item)
+		if name == "" {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		result = append(result, name)
+	}
+	return result
 }
 
 // platformUsername 生成一个稳定的本地用户名。平台用户名可能为空或已被占用，
@@ -368,6 +452,9 @@ func (client *PlatformClient) getJSON(path string, apiKey string, base string) (
 
 // PlatformRelayChannel 把用户的平台会话翻译成一个普通渠道，交给既有代理链路。
 // 这样上游 relay 的 401/402/429/403 语义、流式转发和错误脱敏都不用重写一遍。
+//
+// 有 grants 时这里只作为「默认渠道」：真正的授权项按模型路由，见
+// PlatformRelayChannelForModel。单密钥语义（平台未升级）用这条。
 func PlatformRelayChannel(link model.PlatformLink) model.ModelChannel {
 	return model.ModelChannel{
 		ID:       "platform:" + link.UserID,
@@ -377,6 +464,85 @@ func PlatformRelayChannel(link model.PlatformLink) model.ModelChannel {
 		APIKey:   link.APIKey,
 		Enabled:  true,
 	}
+}
+
+// PlatformRelayChannelForModel 按模型挑一条授权项，返回对应渠道。
+//
+// 路由规则（契约 §6.3）：模型出现在哪些 grant 里，就按 priority 升序依次尝试；
+// 同一模型有多条时也只发一次请求，由调用方在失败后换下一个候选。
+// 没有任何 grant 命中时返回 false，让上层按「平台未授权该模型」处理。
+func PlatformRelayChannelForModel(link model.PlatformLink, grants []model.PlatformGrant, modelName string) (model.ModelChannel, bool) {
+	grant, ok := SelectPlatformGrant(grants, modelName)
+	if !ok {
+		return model.ModelChannel{}, false
+	}
+	channel := PlatformRelayChannel(link)
+	channel.ID = "platform:" + link.UserID + ":" + grant.GrantKey
+	channel.APIKey = grant.APIKey
+	channel.PlatformGrantKey = grant.GrantKey
+	channel.Name = platformGrantChannelName(grant)
+	return channel, true
+}
+
+// platformGrantChannelName 是日志与用量归属里显示的渠道名。
+func platformGrantChannelName(grant model.PlatformGrant) string {
+	if label := strings.TrimSpace(grant.Label); label != "" {
+		return "New API 平台 · " + label
+	}
+	if group := strings.TrimSpace(grant.Group); group != "" {
+		return "New API 平台 · " + group
+	}
+	return "New API 平台"
+}
+
+// SelectPlatformGrant 按模型选一条可用授权项。
+//
+// 优先精确命中 models 声明；声明为空（legacy 单密钥）时视为「平台未声明模型面」，
+// 交给 relay 自己判断，避免把 v1 用户挡在门外。
+// 同一模型命中多条时按 priority、grant key 排序，保证结果确定。
+func SelectPlatformGrant(grants []model.PlatformGrant, modelName string) (model.PlatformGrant, bool) {
+	modelName = strings.TrimSpace(modelName)
+	candidates := make([]model.PlatformGrant, 0, len(grants))
+	for _, grant := range grants {
+		if grant.Status != "" && grant.Status != model.PlatformGrantStatusActive {
+			continue
+		}
+		if len(grant.Models) == 0 {
+			// 声明面为空的授权项兜底：它什么都可能接得住，优先级放最后。
+			candidates = append(candidates, grant)
+			continue
+		}
+		if platformGrantHasModel(grant, modelName) {
+			candidates = append(candidates, grant)
+		}
+	}
+	if len(candidates) == 0 {
+		return model.PlatformGrant{}, false
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		// 声明过模型面的授权项永远排在兜底项（v1 legacy）之前：
+		// 兜底项什么都接得住，先试它等于绕过了平台声明的分组边界。
+		leftDeclared := len(candidates[i].Models) > 0
+		rightDeclared := len(candidates[j].Models) > 0
+		if leftDeclared != rightDeclared {
+			return leftDeclared
+		}
+		if candidates[i].Priority != candidates[j].Priority {
+			return candidates[i].Priority < candidates[j].Priority
+		}
+		return candidates[i].GrantKey < candidates[j].GrantKey
+	})
+	return candidates[0], true
+}
+
+// platformGrantHasModel 判断模型是否属于这条授权项声明的模型面。
+func platformGrantHasModel(grant model.PlatformGrant, modelName string) bool {
+	for _, item := range grant.Models {
+		if strings.EqualFold(strings.TrimSpace(item), modelName) {
+			return true
+		}
+	}
+	return false
 }
 
 // platformRelayBaseURL 归一化 relay 基址。契约里 api_base_url 不含 /v1，
@@ -409,6 +575,19 @@ type PlatformStatusView struct {
 	UsedQuota      int64  `json:"usedQuota"`
 	UnlimitedQuota bool   `json:"unlimitedQuota"`
 	Linked         bool   `json:"linked"`
+	// Grants 是授权项摘要：只给分组、模型与状态，绝不含密钥。
+	// 前端用它展示「这个账号从平台拿到几组、覆盖哪些模型」。
+	Grants []PlatformGrantView `json:"grants"`
+}
+
+// PlatformGrantView 是给前端看的授权项摘要。
+type PlatformGrantView struct {
+	ID       string   `json:"id"`
+	Label    string   `json:"label"`
+	Group    string   `json:"group"`
+	Models   []string `json:"models"`
+	Priority int      `json:"priority"`
+	Status   string   `json:"status"`
 }
 
 // PlatformStatusOf 构造不含密钥的状态视图。
@@ -423,7 +602,29 @@ func PlatformStatusOf(link model.PlatformLink) PlatformStatusView {
 		UsedQuota:      link.UsedQuota,
 		UnlimitedQuota: link.UnlimitedQuot,
 		Linked:         strings.TrimSpace(link.APIKey) != "",
+		Grants:         platformGrantViews(link.UserID),
 	}
+}
+
+// platformGrantViews 把授权项压成摘要；读取失败按空列表处理，
+// 状态接口不该因为一次数据库抖动就整体失败。
+func platformGrantViews(userID string) []PlatformGrantView {
+	grants, err := repository.ListPlatformGrants(userID)
+	if err != nil || len(grants) == 0 {
+		return []PlatformGrantView{}
+	}
+	views := make([]PlatformGrantView, 0, len(grants))
+	for _, grant := range grants {
+		views = append(views, PlatformGrantView{
+			ID:       grant.GrantKey,
+			Label:    grant.Label,
+			Group:    grant.Group,
+			Models:   grant.Models,
+			Priority: grant.Priority,
+			Status:   grant.Status,
+		})
+	}
+	return views
 }
 
 // CurrentPlatformStatus 读取当前用户在本应用下的平台会话状态。
@@ -437,6 +638,9 @@ func CurrentPlatformStatus(_ context.Context, userID string) (PlatformStatusView
 
 // UnlinkPlatformSession 只解除本应用自己的绑定，不动平台侧密钥。
 func UnlinkPlatformSession(userID string) error {
+	if err := repository.DeletePlatformGrants(userID); err != nil {
+		return err
+	}
 	return repository.DeletePlatformLink(userID)
 }
 
@@ -457,17 +661,60 @@ func PlatformRelayFailureMessage(status int) string {
 	}
 }
 
-// HandlePlatformRelayFailure 只看 401：那是契约里唯一的「授权已撤销」信号。
-// 命中时立即失效该用户在本应用的全部会话，并且不重试、不回退到别的凭据。
+// HandlePlatformRelayFailure 处理 relay 的失败。
+//
+// v3 里 401 的含义缩小到「**这一张**密钥被撤销」：只把对应 grant 降级，
+// 其他 grant 仍可继续用；只有当这个用户所有 grant 都已失效时，才等同于
+// 「用户断开了应用」，此时清掉会话让前端重新走授权页。
 // 402 / 429 / 403 都不动会话——额度不足或限流不代表授权没了。
-func HandlePlatformRelayFailure(userID string, status int) bool {
-	if status != http.StatusUnauthorized || strings.TrimSpace(userID) == "" {
+func HandlePlatformRelayFailure(userID string, grantKey string, status int) bool {
+	if !platformStatusRevokesGrant(status) || strings.TrimSpace(userID) == "" {
 		return false
 	}
-	if err := repository.DeletePlatformLink(userID); err != nil {
+	grantKey = strings.TrimSpace(grantKey)
+	if grantKey == "" {
+		// 没有 grant 标记说明是 v1 单密钥路径：401 就是整份授权失效。
+		return dropPlatformSession(userID)
+	}
+	grants, err := repository.ListPlatformGrants(userID)
+	if err != nil {
 		return false
+	}
+	if err := repository.MarkPlatformGrantStatus(userID, grantKey, model.PlatformGrantStatusRevoked); err != nil {
+		return false
+	}
+	if !platformGrantsExhausted(grants, grantKey) {
+		return false
+	}
+	return dropPlatformSession(userID)
+}
+
+// platformStatusRevokesGrant 判断这个 relay 状态码是否意味着密钥已失效。
+// 只有 401 算；402 是钱包额度、429 是限流、403 是白名单，都不动凭据。
+func platformStatusRevokesGrant(status int) bool {
+	return status == http.StatusUnauthorized
+}
+
+// platformGrantsExhausted 判断在 grantKey 也被撤销之后，这个用户是否已经
+// 没有任何可用授权项。它是纯函数，便于直接锁住「单张失效不登出」这条契约。
+func platformGrantsExhausted(grants []model.PlatformGrant, revokedKey string) bool {
+	for _, grant := range grants {
+		if grant.GrantKey == revokedKey {
+			continue
+		}
+		if grant.Status == "" || grant.Status == model.PlatformGrantStatusActive {
+			return false
+		}
 	}
 	return true
+}
+
+// dropPlatformSession 清掉该用户在本应用下的授权项与会话。
+func dropPlatformSession(userID string) bool {
+	if err := repository.DeletePlatformGrants(userID); err != nil {
+		return false
+	}
+	return repository.DeletePlatformLink(userID) == nil
 }
 
 // ExchangePlatformSession 是前端回调的唯一入口：用一次性启动码换到本应用会话。
@@ -508,9 +755,33 @@ var (
 	platformModelCache   = map[string]platformModelCacheEntry{}
 )
 
-// PlatformModels 读取平台为该用户开放的模型列表。
-// 取不到时返回空列表而不是错误：模型列表缺失不该让整个页面打不开。
+// PlatformModels 读取并合并该用户全部授权项的模型列表。
+//
+// 契约 §6.2：模型目录是各 grant 的并集；单个 grant 取不到时降级用它声明的
+// models，而不是让整个列表变空——否则一次网络抖动就会把生图模型从下拉框里
+// 抹掉。缓存按用户 + 授权项集合做键，grant 变了自动失效。
 func PlatformModels(link model.PlatformLink) []string {
+	grants, err := repository.ListPlatformGrants(link.UserID)
+	if err != nil || len(grants) == 0 {
+		return PlatformModelsForSingleKey(link)
+	}
+	cacheKey := platformModelsCacheKey(link, grants)
+	platformModelCacheMu.Lock()
+	if entry, ok := platformModelCache[cacheKey]; ok && time.Now().Before(entry.expiresAt) {
+		platformModelCacheMu.Unlock()
+		return entry.models
+	}
+	platformModelCacheMu.Unlock()
+
+	models := mergePlatformGrantModels(link, grants)
+	platformModelCacheMu.Lock()
+	platformModelCache[cacheKey] = platformModelCacheEntry{models: models, expiresAt: time.Now().Add(platformModelCacheTTL)}
+	platformModelCacheMu.Unlock()
+	return models
+}
+
+// PlatformModelsForSingleKey 是 v1 单密钥语义下的模型读取：只问那一张密钥。
+func PlatformModelsForSingleKey(link model.PlatformLink) []string {
 	cacheKey := link.APIBaseURL + "|" + link.APIKey
 	platformModelCacheMu.Lock()
 	if entry, ok := platformModelCache[cacheKey]; ok && time.Now().Before(entry.expiresAt) {
@@ -524,6 +795,74 @@ func PlatformModels(link model.PlatformLink) []string {
 	platformModelCache[cacheKey] = platformModelCacheEntry{models: models, expiresAt: time.Now().Add(platformModelCacheTTL)}
 	platformModelCacheMu.Unlock()
 	return models
+}
+
+// platformModelsCacheKey 把用户与授权项集合编进缓存键：grant 增删或换分组后
+// 必须重新拉列表，否则用户会继续看到已经不可用的模型。
+func platformModelsCacheKey(link model.PlatformLink, grants []model.PlatformGrant) string {
+	var builder strings.Builder
+	builder.WriteString(link.APIBaseURL)
+	builder.WriteString("|grants|")
+	for _, grant := range grants {
+		builder.WriteString(grant.GrantKey)
+		builder.WriteByte(':')
+		builder.WriteString(grant.Group)
+		builder.WriteByte(':')
+		builder.WriteString(grant.Status)
+		builder.WriteByte(';')
+	}
+	return builder.String()
+}
+
+// mergePlatformGrantModels 并行拉取每张授权项的 /v1/models 并合并去重。
+// 单个 grant 失败时退回它的声明模型面，保证「拉不到」不等于「没有」。
+func mergePlatformGrantModels(link model.PlatformLink, grants []model.PlatformGrant) []string {
+	type grantResult struct {
+		index  int
+		models []string
+	}
+	results := make(chan grantResult, len(grants))
+	for index, grant := range grants {
+		go func(index int, grant model.PlatformGrant) {
+			models := fetchPlatformModelsForGrant(link, grant)
+			if len(models) == 0 {
+				models = grant.Models
+			}
+			results <- grantResult{index: index, models: models}
+		}(index, grant)
+	}
+
+	byGrant := make([][]string, len(grants))
+	for range grants {
+		result := <-results
+		byGrant[result.index] = result.models
+	}
+
+	models := make([]string, 0, len(grants)*4)
+	seen := make(map[string]struct{})
+	for _, list := range byGrant {
+		for _, item := range list {
+			name := strings.TrimSpace(item)
+			if name == "" {
+				continue
+			}
+			if _, ok := seen[name]; ok {
+				continue
+			}
+			seen[name] = struct{}{}
+			models = append(models, name)
+		}
+	}
+	return models
+}
+
+// fetchPlatformModelsForGrant 用某一条授权项的密钥拉它自己的模型列表。
+func fetchPlatformModelsForGrant(link model.PlatformLink, grant model.PlatformGrant) []string {
+	return fetchPlatformModels(model.PlatformLink{
+		UserID:     link.UserID,
+		APIBaseURL: link.APIBaseURL,
+		APIKey:     grant.APIKey,
+	})
 }
 
 func fetchPlatformModels(link model.PlatformLink) []string {
@@ -569,10 +908,15 @@ func fetchPlatformModels(link model.PlatformLink) []string {
 	return models
 }
 
-// InvalidatePlatformModels 在会话失效或额度刷新后丢弃缓存的模型列表。
+// InvalidatePlatformModels 在会话失效或额度刷新后丢弃该用户的模型列表缓存。
 func InvalidatePlatformModels(link model.PlatformLink) {
 	platformModelCacheMu.Lock()
 	delete(platformModelCache, link.APIBaseURL+"|"+link.APIKey)
+	for key := range platformModelCache {
+		if strings.HasPrefix(key, link.APIBaseURL+"|grants|") {
+			delete(platformModelCache, key)
+		}
+	}
 	platformModelCacheMu.Unlock()
 }
 
@@ -603,4 +947,3 @@ func PlatformModelChannelSetting(base model.PublicModelChannelSetting, link mode
 	base.AllowUserRemoteChannel = &allowUserRemoteChannel
 	return base
 }
-

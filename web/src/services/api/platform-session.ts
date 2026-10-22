@@ -17,6 +17,18 @@ export type PlatformSessionStatus = {
     quota: number;
     usedQuota: number;
     unlimitedQuota: boolean;
+    /** 平台下发的授权项摘要：只有分组、模型与状态，不含任何密钥。 */
+    grants: PlatformGrantStatus[];
+};
+
+/** 一条平台授权项的对外形态（v3 契约的 grants[]）。 */
+export type PlatformGrantStatus = {
+    id: string;
+    label: string;
+    group: string;
+    models: string[];
+    priority: number;
+    status: "active" | "revoked" | string;
 };
 
 export type PlatformExchangeResult = {

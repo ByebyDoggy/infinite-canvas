@@ -185,3 +185,61 @@ func TestModelProtocolChannelFlow(t *testing.T) {
 		})
 	}
 }
+
+// 平台 v3 的授权项路由：模型命中哪条 grant，就用哪张密钥。
+// 这条链路决定「普通用户能不能用上生图模型」，因此单独锁住。
+func TestSelectAIRequestChannelRoutesPlatformGrantByModel(t *testing.T) {
+	previousConfig := config.Cfg
+	config.Cfg = config.Config{StorageDriver: "sqlite", DatabaseDSN: ":memory:", AILogDir: t.TempDir()}
+	blockProtocolNetwork(t)
+	t.Cleanup(func() { config.Cfg = previousConfig })
+	db, err := repository.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection.SetMaxOpenConns(1)
+	t.Cleanup(func() { _ = connection.Close() })
+
+	user := model.User{ID: "platform-grant-user", Username: "platform-grant-user", Role: model.UserRoleUser, Status: model.UserStatusActive}
+	if err := db.Create(&user).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.SavePlatformLink(model.PlatformLink{
+		UserID: "platform-grant-user", PlatformUser: 777, Username: "creator",
+		APIKey: "sk-primary", APIBaseURL: "https://api.example.com",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.ReplacePlatformGrants("platform-grant-user", []model.PlatformGrant{
+		{UserID: "platform-grant-user", GrantKey: "auto:image", Label: "图像生成", Group: "GPT-Image-2.5", Models: []string{"gpt-image-2.5"}, APIKey: "sk-image", Status: model.PlatformGrantStatusActive},
+		{UserID: "platform-grant-user", GrantKey: "auto:text", Label: "文本", Group: "default", Models: []string{"glm-5.3"}, APIKey: "sk-text", Priority: 1, Status: model.PlatformGrantStatusActive},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	authUser := model.AuthUser{ID: "platform-grant-user"}
+	channel, _, err := selectAIRequestChannel(authUser, "gpt-image-2.5", "", "", true)
+	if err != nil {
+		t.Fatalf("gpt-image-2.5 should resolve: %v", err)
+	}
+	if channel.APIKey != "sk-image" || channel.PlatformGrantKey != "auto:image" {
+		t.Fatalf("gpt-image-2.5 routed to %q (grant %q)", channel.APIKey, channel.PlatformGrantKey)
+	}
+
+	channel, _, err = selectAIRequestChannel(authUser, "glm-5.3", "", "", true)
+	if err != nil {
+		t.Fatalf("glm-5.3 should resolve: %v", err)
+	}
+	if channel.APIKey != "sk-text" || channel.PlatformGrantKey != "auto:text" {
+		t.Fatalf("glm-5.3 routed to %q (grant %q)", channel.APIKey, channel.PlatformGrantKey)
+	}
+
+	// 平台没有为该模型授权：必须直接失败，不能回退到别的密钥。
+	if _, _, err := selectAIRequestChannel(authUser, "not-granted", "", "", true); err != errPlatformModelNotGranted {
+		t.Fatalf("an ungranted model must fail with errPlatformModelNotGranted, got %v", err)
+	}
+}

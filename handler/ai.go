@@ -15,10 +15,15 @@ import (
 	"time"
 
 	"github.com/tigerowo/infinite-canvas/model"
+	"github.com/tigerowo/infinite-canvas/repository"
 	"github.com/tigerowo/infinite-canvas/service"
 )
 
 const userModelChannelHeader = "X-User-Model-Channel-ID"
+
+// errPlatformModelNotGranted 表示平台没有为当前模型签发任何授权项。
+// 它必须和「上游报错」区分开：前者换一次重试也不会好，后者值得重试。
+var errPlatformModelNotGranted = fmt.Errorf("该模型不在本应用的授权范围内")
 
 // selectAIRequestChannel 依次按「用户自带渠道 → 平台会话渠道 → 系统渠道」解析。
 // 用户自带渠道（X-User-Model-Channel-ID）优先级最高，保持原有本地直连语义不变。
@@ -30,7 +35,18 @@ func selectAIRequestChannel(user model.AuthUser, modelName string, channelID str
 		return channel, userChannelID, err
 	}
 	if link, ok := service.PlatformSessionForUser(user.ID); ok {
-		return service.PlatformRelayChannel(link), "", nil
+		grants := platformGrantsForUser(user.ID)
+		if len(grants) == 0 {
+			// 平台还没升级到 v3（没有 grants）：按 v1 单密钥语义直通。
+			return service.PlatformRelayChannel(link), "", nil
+		}
+		grantChannel, found := service.PlatformRelayChannelForModel(link, grants, modelName)
+		if !found {
+			// 有 grants 但都不覆盖这个模型：说明平台没有为它授权。
+			// 此时不能回退到别的密钥——那会绕过分组边界。
+			return model.ModelChannel{}, "", errPlatformModelNotGranted
+		}
+		return grantChannel, "", nil
 	}
 	if !service.UserCanUseRemoteModelChannel(user) {
 		return model.ModelChannel{}, "", fmt.Errorf("当前账号未开放云端渠道")
@@ -39,10 +55,23 @@ func selectAIRequestChannel(user model.AuthUser, modelName string, channelID str
 	return channel, "", err
 }
 
+// platformGrantsForUser 读取用户的平台授权项；读取失败按「没有授权项」处理，
+// 让调用方退回 v1 的单密钥渠道，而不是直接失败。
+func platformGrantsForUser(userID string) []model.PlatformGrant {
+	grants, err := repository.ListPlatformGrants(userID)
+	if err != nil {
+		return nil
+	}
+	return grants
+}
+
+// failAIChannelSelect 把渠道选择失败翻译成用户能看懂的一句话。
 func failAIChannelSelect(w http.ResponseWriter, err error, fallback string) {
 	message := strings.TrimSpace(err.Error())
 	switch message {
 	case "当前账号未开放云端渠道", "请先登录", "缺少模型名称", "缺少模型渠道", "本地渠道不存在", "本地渠道配置不完整", "本地渠道不支持该模型", "指定模型渠道不可用", "模型未开放":
+		Fail(w, message)
+	case errPlatformModelNotGranted.Error():
 		Fail(w, message)
 	default:
 		Fail(w, fallback)
@@ -258,8 +287,8 @@ func copyAIResponse(w http.ResponseWriter, request *http.Request, channel model.
 			onFailure()
 		}
 		saveAIProxyLog(logContext, response.StatusCode, string(payload), strings.TrimSpace(string(payload)))
-		if handled := service.HandlePlatformRelayFailure(logContext.UserID, response.StatusCode); handled {
-			// 401 是契约里唯一的「授权已撤销」信号：会话已失效，不重试。
+		if handled := service.HandlePlatformRelayFailure(logContext.UserID, channel.PlatformGrantKey, response.StatusCode); handled {
+			// 这个用户的全部授权项都已失效，等同于断开连接：不重试。
 			FailWithStatus(w, http.StatusUnauthorized, service.PlatformRelayFailureMessage(response.StatusCode))
 			return
 		}
